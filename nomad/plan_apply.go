@@ -5,8 +5,10 @@ package nomad
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"runtime"
+	"strconv"
 	"time"
 
 	metrics "github.com/armon/go-metrics"
@@ -162,7 +164,7 @@ func (p *planner) planApply() {
 		}
 
 		// Evaluate the plan
-		result, err := evaluatePlan(pool, snap, pending.plan, p.srv.logger)
+		result, err := evaluatePlan(pool, snap, pending.plan, p.srv.logger, p.srv.encrypter)
 		if err != nil {
 			p.srv.logger.Error("failed to evaluate plan", "error", err)
 			pending.respond(nil, err)
@@ -465,7 +467,7 @@ func (p *planner) asyncPlanWait(indexCh chan<- uint64, future raft.ApplyFuture,
 // evaluatePlan is used to determine what portions of a plan
 // can be applied if any. Returns if there should be a plan application
 // which may be partial or if there was an error
-func evaluatePlan(pool *EvaluatePool, snap *state.StateSnapshot, plan *structs.Plan, logger log.Logger) (*structs.PlanResult, error) {
+func evaluatePlan(pool *EvaluatePool, snap *state.StateSnapshot, plan *structs.Plan, logger log.Logger, encrypter *Encrypter) (*structs.PlanResult, error) {
 	defer metrics.MeasureSince([]string{"nomad", "plan", "evaluate"}, time.Now())
 
 	logger.Trace("evaluating plan", "plan", log.Fmt("%#v", plan))
@@ -479,6 +481,21 @@ func evaluatePlan(pool *EvaluatePool, snap *state.StateSnapshot, plan *structs.P
 	err = snap.DenormalizeAllocationsMap(plan.NodePreemptions)
 	if err != nil {
 		return nil, err
+	}
+
+	outOfLicense, err := evaluatePlanLicense(snap, plan, logger, encrypter)
+	if err != nil {
+		return nil, err
+	}
+
+	if outOfLicense {
+		index, err := refreshIndex(snap)
+		if err != nil {
+			return nil, err
+		}
+
+		logger.Debug("plan for evaluation exceeds license limit. Forcing state refresh", "eval_id", plan.EvalID, "refresh_index", index)
+		return &structs.PlanResult{RefreshIndex: index}, nil
 	}
 
 	// Check if the plan exceeds quota
@@ -499,6 +516,96 @@ func evaluatePlan(pool *EvaluatePool, snap *state.StateSnapshot, plan *structs.P
 	}
 
 	return evaluatePlanPlacements(pool, snap, plan, logger)
+}
+
+func evaluatePlanLicense(snap *state.StateSnapshot, plan *structs.Plan, logger log.Logger, encrypter *Encrypter) (bool, error) {
+
+	myLicenses := plan.Job.AppLicenses
+	if len(myLicenses) == 0 {
+		return false, nil
+	}
+	ws := memdb.NewWatchSet()
+	jobs, err := snap.Jobs(ws)
+	if err != nil {
+		logger.Error("Unable to create snapshot for job", "jobid", plan.Job.GetID())
+		return false, err
+	}
+	// Get the license usage for all jobs
+	licenseUsed := make(map[string]int64)
+	for {
+		raw := jobs.Next()
+		if raw == nil {
+			break
+		}
+		job := raw.(*structs.Job)
+		if job.Status == structs.JobStatusRunning {
+			for _, l := range job.AppLicenses {
+				count := l.Count
+				if count == 0 {
+					count = 1
+				}
+				logger.Trace("Licenses found in use: ", "job", job.GetID(), "license", l.License, "count", count)
+				licenseUsed[l.License] += count
+			}
+		}
+	}
+	for l := range licenseUsed {
+		metrics.SetGaugeWithLabels([]string{"nomad", "app_license", "licenses_in_use"}, float32(licenseUsed[l]), []metrics.Label{{Name: "license_name", Value: l}})
+	}
+
+	// For all licenses in the plan, add the licenseUsed to the living count and see if it overflows, error if so.
+	for _, l := range plan.Job.AppLicenses {
+		count := l.Count
+		if count == 0 {
+			count = 1
+		}
+		licenseUsed[l.License] += count
+		// Get Applicense, see if exhausted
+		ev, err := snap.GetVariable(ws, "default", "license/"+l.License)
+		if err != nil {
+			logger.Debug("Could not get license", "license", "license/"+l.License)
+			continue
+		}
+		if ev == nil {
+			logger.Debug("Could not GetVariable for specified license", "license", "license/"+l.License)
+			continue
+		}
+		cleartext, err := encrypter.Decrypt(ev.Data, ev.KeyID)
+		if err != nil {
+			logger.Warn("Could not decrypt license", "keyid", ev.KeyID, "license", "license/"+l.License)
+			continue
+		}
+		dv := &structs.VariableDecrypted{
+			VariableMetadata: ev.VariableMetadata,
+		}
+		dv.Items = make(map[string]string)
+		err = json.Unmarshal(cleartext, &dv.Items)
+		if err != nil {
+			logger.Warn("Could not unmarshal json", "json", cleartext, "license", "license/"+l.License)
+			continue
+		}
+		if licCount, ok := dv.Items["count"]; ok {
+			licenseCount, err := strconv.ParseInt(licCount, 10, 64)
+			if err != nil {
+				logger.Error("Could not get license count", "license", l.License, "count", licCount)
+				continue
+			}
+			if licenseUsed[l.License] > licenseCount {
+				logger.Warn("License exhausted, rescheduling job", "jobId", plan.Job.GetID(), "license", l.License)
+				metrics.SetGaugeWithLabels([]string{"nomad", "app_license", "waiting"}, 1, []metrics.Label{{Name: "job_id", Value: plan.Job.GetID()}})
+				return true, nil
+			}
+		} else {
+			logger.Error("Count not found for license", "license", "license/"+l.License)
+		}
+	}
+	metrics.SetGaugeWithLabels([]string{"nomad", "app_license", "waiting"}, 0, []metrics.Label{{Name: "job_id", Value: plan.Job.GetID()}})
+	for _, l := range plan.Job.AppLicenses {
+		// We already updated the count used above, so just publish that.
+		metrics.SetGaugeWithLabels([]string{"nomad", "app_license", "licenses_in_use"}, float32(licenseUsed[l.License]), []metrics.Label{{Name: "license_name", Value: l.License}})
+	}
+
+	return false, nil
 }
 
 // evaluatePlanPlacements is used to determine what portions of a plan can be

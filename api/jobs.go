@@ -982,7 +982,7 @@ type Job struct {
 	Meta             map[string]string       `hcl:"meta,block"`
 	ConsulToken      *string                 `mapstructure:"consul_token" hcl:"consul_token,optional"`
 	VaultToken       *string                 `mapstructure:"vault_token" hcl:"vault_token,optional"`
-
+	AppLicenses      []*AppLicense           `hcl:"app_license,block"`
 	/* Fields set by server, not sourced from job config file */
 
 	Stop                     *bool
@@ -1096,7 +1096,6 @@ func (j *Job) Canonicalize() {
 	if j.Multiregion != nil {
 		j.Multiregion.Canonicalize()
 	}
-
 	for _, tg := range j.TaskGroups {
 		tg.Canonicalize(j)
 	}
@@ -1247,6 +1246,12 @@ func (j *Job) SetMeta(key, val string) *Job {
 // AddDatacenter is used to add a datacenter to a job.
 func (j *Job) AddDatacenter(dc string) *Job {
 	j.Datacenters = append(j.Datacenters, dc)
+	return j
+}
+
+// AddAppLicense is used to add a license to a job.
+func (j *Job) AddAppLicense(lic string, count int64) *Job {
+	j.AppLicenses = append(j.AppLicenses, &AppLicense{License: lic, Count: count})
 	return j
 }
 
@@ -1543,4 +1548,10 @@ func (j *Jobs) ActionExec(ctx context.Context,
 	}
 
 	return s.run(ctx)
+}
+
+// AppLicense is used to limit the number of running jobs with the same license.
+type AppLicense struct {
+	License string `hcl:"license"`
+	Count   int64  `hcl:"count,optional"`
 }

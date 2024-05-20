@@ -1039,6 +1039,7 @@ func ApiJobToStructJob(job *api.Job) *structs.Job {
 		VaultNamespace: *job.VaultNamespace,
 		Constraints:    ApiConstraintsToStructs(job.Constraints),
 		Affinities:     ApiAffinitiesToStructs(job.Affinities),
+		AppLicenses:    ApiAppLicensesToStructs(job.AppLicenses),
 	}
 
 	// Update has been pushed into the task groups. stagger and max_parallel are
@@ -2074,4 +2075,25 @@ func validateEvalPriorityOpt(priority int) HTTPCodedError {
 		return CodedError(400, "Eval priority must be between 1 and 100 inclusively")
 	}
 	return nil
+}
+
+func ApiAppLicensesToStructs(in []*api.AppLicense) []*structs.AppLicense {
+	if in == nil {
+		return nil
+	}
+	out := make([]*structs.AppLicense, len(in))
+	for i, al := range in {
+		out[i] = ApiAppLicenseToStructs(al)
+	}
+	return out
+}
+
+func ApiAppLicenseToStructs(in *api.AppLicense) *structs.AppLicense {
+	if in == nil {
+		return nil
+	}
+	return &structs.AppLicense{
+		License: in.License,
+		Count:   in.Count,
+	}
 }

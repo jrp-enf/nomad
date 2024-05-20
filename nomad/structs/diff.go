@@ -106,6 +106,17 @@ func (j *Job) Diff(other *Job, contextual bool) (*JobDiff, error) {
 		diff.Objects = append(diff.Objects, setDiff)
 	}
 
+	// Licenses diff
+	licenseDiff := primitiveObjectSetDiff(
+		interfaceSlice(j.AppLicenses),
+		interfaceSlice(other.AppLicenses),
+		[]string{"str"},
+		"AppLicense",
+		contextual)
+	if licenseDiff != nil {
+		diff.Objects = append(diff.Objects, licenseDiff...)
+	}
+
 	// Constraints diff
 	conDiff := primitiveObjectSetDiff(
 		interfaceSlice(j.Constraints),

@@ -4480,6 +4480,9 @@ type Job struct {
 	ModifyIndex uint64
 	// JobModifyIndex is the index at which the job *specification* last changed
 	JobModifyIndex uint64
+
+	// Licenses is the list of licenses this job requires to schedule
+	AppLicenses []*AppLicense
 }
 
 // NamespacedID returns the namespaced id useful for logging
@@ -13338,4 +13341,9 @@ func NewRpcError(err error, code *int64) *RpcError {
 
 func (r *RpcError) Error() string {
 	return r.Message
+}
+
+type AppLicense struct {
+	License string
+	Count   int64
 }

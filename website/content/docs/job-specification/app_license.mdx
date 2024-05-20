@@ -1,0 +1,56 @@
+---
+layout: docs
+page_title: app_license Block - Job Specification
+description: |-
+  The "app_license" block allows restricting the set of running jobs to a limit specified by a variable.
+---
+
+# `app_license` Block
+
+<Placement
+  groups={[
+    ['job', 'app_license'],
+  ]}
+/>
+
+The `app_license` block allows operators to avoid running too many jobs that take up external 
+(real) licenses, for instance from flexlm. This avoids having jobs which are running (thus taking 
+up real resources like cpu and memory) but would just block waiting for a license to be freed.
+
+app_licenses are tracked with a variable named `license/<name of app license>` with 
+a field `count` equal to the number of licenses that are available.
+
+app_license may only be specified at the [job][job] level.
+
+```hcl
+job "docs" {
+  # Use 1 license of license/vendor/feature and 2 licenses of license/vendor/feature2
+  app_license {
+    license = "vendor/feature"
+  }
+  app_license {
+    license = "vendor/feature2"
+    count = 2
+  }
+
+  group "example" {
+    task "server" {
+...
+    }
+  }
+}
+```
+
+Nomad will use app_licenses in the final plan before placement. If the sum of every currently running
+job's license usage plus the usage for the job in planning is greater than the count of the variable 
+referenced, Nomad will reject the job plan and it will return to the scheduling queue.
+
+A missing count or a value of 0 will be interpreted as a count of 1.
+
+Licenses which do not match a variable /license/<license name> which specifies a `count` field are 
+considered inifitely available.
+
+Negative values for `count` are permitted. This allows you to temporarily increase the available
+licenses, for instance during off-hours. By creating a job which does not use a real license (e.g. 
+just sleeps) but has a negative license count, it will increase the pool of licenses available for
+the duration of the job run.

@@ -65,6 +65,7 @@ $ nomad job run -output example.nomad.hcl
     "NodePool": "prod",
     "Constraints": null,
     "Affinities": null,
+    "AppLicenses": null,
     "TaskGroups": [
       {
         "Name": "cache",
@@ -250,6 +251,9 @@ The `Job` object supports the following keys:
 
 - `Affinities` - A list to define placement preferences on nodes where a job can be
   run. See the affinity reference for more details.
+
+- `AppLicenses` - A list to define license requirements that must be met before a job can be
+  run. See the app_license reference for more details.
 
 - `Spreads` - A list to define allocation spread across attributes. See the spread reference
   for more details.
@@ -932,6 +936,20 @@ The `Affinity` object supports the following keys:
 
 - `Weight` - A non zero weight, valid values are from -100 to 100. Used to express
   relative preference when there is more than one affinity.
+
+### AppLicense
+
+AppLicenses allow operators to limit the number of simultaneous jobs. More details
+on how they work are described in [app_licenses](/nomad/docs/job-specification/app_license)
+
+The `AppLicense` object supports the following keys:
+
+- `License` - Specifies the license name, which must match a variable called 
+/license/<name>, which must contain a field 'count' with the number of total licenses available.
+Licenses which do not match a variable with a count field are considered inifitely available.
+
+- `Count` - Specifies the number of instances of the license to use. A zero or non-existent count
+is considered as a value of '1'.
 
 ### Log Rotation
 
